@@ -22,7 +22,19 @@ if orders_file and box_files:
     orders = pd.read_csv(orders_file, dtype=str)
     # Normalize column names for safety
     orders.columns = [c.strip().upper() for c in orders.columns]
-    orders['UPC_CODE_NORM'] = orders['UPC CODE'].apply(normalize_upc)
+    # Try to find the correct UPC column
+upc_col = None
+for col in orders.columns:
+    if col.strip().replace(" ", "_").upper() in ["UPC_CODE", "UPC"]:
+        upc_col = col
+        break
+
+if not upc_col:
+    st.error("Your orders.csv must contain a column for UPC (like 'UPC CODE' or 'UPC_CODE').")
+    st.stop()
+
+orders['UPC_CODE_NORM'] = orders[upc_col].apply(normalize_upc)
+
     orders['TOTAL'] = orders['TOTAL'].astype(int)
     orders['RESERVED'] = orders['RESERVED'].astype(int)
     orders['CONFIRMED'] = orders['CONFIRMED'].astype(int)
