@@ -59,62 +59,57 @@ for uploaded_file in box_files:
 
     # --- Process Results ---
 all_codes = set(list(orders['UPC_CODE_NORM']) + list(boxes.keys()))
-    data = []
-    for code in sorted(all_codes):
-        order = upc_to_row.get(code, None)
-        scanned_by_box = boxes.get(code, {})
-        scanned_total = sum(scanned_by_box.values())
-        box_numbers = ', '.join(sorted(scanned_by_box.keys(), key=lambda x: int(x) if x.isdigit() else x))
-        missing = ""
+data = []
+for code in sorted(all_codes):
+    order = upc_to_row.get(code, None)
+    scanned_by_box = boxes.get(code, {})
+    scanned_total = sum(scanned_by_box.values())
+    box_numbers = ', '.join(sorted(scanned_by_box.keys(), key=lambda x: int(x) if x.isdigit() else x))
+    missing = ""
 
-        if order:
-            total = order['TOTAL']
-            reserved = order['RESERVED']
-            confirmed = order['CONFIRMED']
-            balance = order['BALANCE']
-            style = order['STYLE']
-            # Status logic
-            if scanned_total == reserved and reserved > 0:
-                note = "To invoice"
-            elif scanned_total <= confirmed and confirmed > 0:
-                note = "Already invoiced"
-            elif scanned_total < reserved and reserved > 0:
-                note = f"To unreserve and invoice (missing: {reserved - scanned_total})"
-                missing = str(reserved - scanned_total)
-            elif scanned_total > total:
-                note = "Check: Over-packed"
-            elif scanned_total == 0 and balance > 0:
-                note = f"Not found (missing: {balance})"
-                missing = str(balance)
-            else:
-                note = ""
+    if order:
+        total = order['TOTAL']
+        reserved = order['RESERVED']
+        confirmed = order['CONFIRMED']
+        balance = order['BALANCE']
+        style = order['STYLE']
+        # Status logic
+        if scanned_total == reserved and reserved > 0:
+            note = "To invoice"
+        elif scanned_total <= confirmed and confirmed > 0:
+            note = "Already invoiced"
+        elif scanned_total < reserved and reserved > 0:
+            note = f"To unreserve and invoice (missing: {reserved - scanned_total})"
+            missing = str(reserved - scanned_total)
+        elif scanned_total > total:
+            note = "Check: Over-packed"
+        elif scanned_total == 0 and balance > 0:
+            note = f"Not found (missing: {balance})"
+            missing = str(balance)
         else:
-            # Not in orders
-            total = ''
-            reserved = ''
-            confirmed = ''
-            balance = ''
-            style = ''
-            note = f"Not on order, Remove from {box_numbers}"
+            note = ""
+    else:
+        # Not in orders
+        total = ''
+        reserved = ''
+        confirmed = ''
+        balance = ''
+        style = ''
+        note = f"Not on order, Remove from {box_numbers}"
 
-        data.append({
-            'UPC CODE': code,
-            'STYLE': style,
-            'TOTAL': total,
-            'RESERVED': reserved,
-            'CONFIRMED': confirmed,
-            'BALANCE': balance,
-            'SCANNED QTY': scanned_total,
-            'BOX NUMBERS': box_numbers,
-            'NOTE': note
-        })
+    data.append({
+        'UPC CODE': code,
+        'STYLE': style,
+        'TOTAL': total,
+        'RESERVED': reserved,
+        'CONFIRMED': confirmed,
+        'BALANCE': balance,
+        'SCANNED QTY': scanned_total,
+        'BOX NUMBERS': box_numbers,
+        'NOTE': note
+    })
 
-    df = pd.DataFrame(data)
-    st.dataframe(df, use_container_width=True)
-    csv = df.to_csv(index=False).encode()
-    st.download_button("Download results as CSV", data=csv, file_name='check_results.csv', mime='text/csv')
-
-st.info("""
-Upload your orders.csv and all your box files (as .txt).  
-Results will be shown and can be downloaded as CSV.
-""")
+df = pd.DataFrame(data)
+st.dataframe(df, use_container_width=True)
+csv = df.to_csv(index=False).encode()
+st.download_button("Download results as CSV", data=csv, file_name='check_results.csv', mime='text/csv')
