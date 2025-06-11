@@ -138,7 +138,7 @@ def results_page():
         elif scanned_total <= confirmed and confirmed > 0:
             note = "Already invoiced"
         elif scanned_total < reserved and reserved > 0:
-            note = f"To unreserve and invoice (missing: {reserved - scanned_total})"
+            note = f"Waiting for box upload (missing: {reserved - scanned_total})"
             missing = str(reserved - scanned_total)
         elif scanned_total > total:
             note = "Check: Over-packed"
