@@ -20,21 +20,27 @@ def normalize_upc(upc):
 if orders_file and box_files:
     # --- Read Orders ---
     orders = pd.read_csv(orders_file, dtype=str)
-    # Normalize column names for safety
-    orders.columns = [c.strip().upper() for c in orders.columns]
-    # Try to find the correct UPC column
+    # Don't uppercase everything, keep original headers
+    orders.columns = [c.strip() for c in orders.columns]
+
+    # DEBUG: show all detected columns
+    st.write("Detected columns in orders.csv:", list(orders.columns))
+
+    # Flexible column matching for UPC
+    def colkey(s):
+        return s.strip().replace(" ", "").replace("_", "").upper()
     upc_col = None
     for col in orders.columns:
-        if col.strip().replace(" ", "_").upper() in ["UPC_CODE", "UPC"]:
+        if colkey(col) in ["UPCCODE", "UPC"]:
             upc_col = col
             break
-
     if not upc_col:
-        st.error("Your orders.csv must contain a column for UPC (like 'UPC CODE' or 'UPC_CODE').")
+        st.error("Your orders.csv must contain a column for UPC (like 'UPC CODE', 'UPC_CODE', or 'UPC').")
         st.stop()
 
-    # After converting columns to int
+    # After finding the UPC column, proceed as normal
     orders['UPC_CODE_NORM'] = orders[upc_col].apply(normalize_upc)
+    # Column names below must match your CSV headers (case sensitive, strip spaces)
     orders['TOTAL'] = orders['TOTAL'].astype(int)
     orders['RESERVED'] = orders['RESERVED'].astype(int)
     orders['CONFIRMED'] = orders['CONFIRMED'].astype(int)
@@ -43,7 +49,7 @@ if orders_file and box_files:
     # For matching and output
     upc_to_row = orders.set_index('UPC_CODE_NORM').to_dict('index')
 
-    # --- Read Boxes ---
+    # --- Read Boxes (no headers expected!) ---
     boxes = {}
     for uploaded_file in box_files:
         box_no = uploaded_file.name.replace('BOX NO', '').replace('.TXT','').replace('.txt','').strip()
@@ -113,3 +119,8 @@ if orders_file and box_files:
     st.dataframe(df, use_container_width=True)
     csv = df.to_csv(index=False).encode()
     st.download_button("Download results as CSV", data=csv, file_name='check_results.csv', mime='text/csv')
+
+st.info("""
+Upload your orders.csv and all your box files (as .txt).  
+Results will be shown and can be downloaded as CSV.
+""")
