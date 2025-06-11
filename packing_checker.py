@@ -186,5 +186,6 @@ def main():
     for key in ['orders_file', 'box_file_contents']:
         if key in st.session_state:
             del st.session_state[key]
+            
 if __name__ == "__main__":
     main()
