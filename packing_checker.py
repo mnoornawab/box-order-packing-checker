@@ -180,12 +180,12 @@ def main():
         upload_page()
     else:
         results_page()
-       if st.button("⬅️ Back to Uploads"):
-    st.session_state["trigger_results"] = False
-    # Clear uploaded files
-    for key in ['orders_file', 'box_file_contents']:
-        if key in st.session_state:
-            del st.session_state[key]
-            
+        if st.button("⬅️ Back to Uploads"):
+            st.session_state["trigger_results"] = False
+            # Clear uploaded files
+            for key in ['orders_file', 'box_file_contents']:
+                if key in st.session_state:
+                    del st.session_state[key]
+
 if __name__ == "__main__":
     main()
