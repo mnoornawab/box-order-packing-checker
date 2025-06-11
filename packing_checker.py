@@ -43,22 +43,22 @@ orders['BALANCE'] = orders['BALANCE'].astype(int)
 # For matching and output
 upc_to_row = orders.set_index('UPC_CODE_NORM').to_dict('index')
 
-    # --- Read Boxes ---
-    boxes = {}
-    for uploaded_file in box_files:
-        box_no = uploaded_file.name.replace('BOX NO', '').replace('.TXT','').replace('.txt','').strip()
-        for line in uploaded_file:
-            decoded = line.decode('utf-8').strip()
-            if ',' in decoded:
-                code, qty = decoded.split(',')
-                code_norm = normalize_upc(code)
-                qty = int(qty.strip())
-                if code_norm not in boxes:
-                    boxes[code_norm] = {}
-                boxes[code_norm][box_no] = boxes[code_norm].get(box_no, 0) + qty
+# --- Read Boxes ---
+boxes = {}
+for uploaded_file in box_files:
+    box_no = uploaded_file.name.replace('BOX NO', '').replace('.TXT','').replace('.txt','').strip()
+    for line in uploaded_file:
+        decoded = line.decode('utf-8').strip()
+        if ',' in decoded:
+            code, qty = decoded.split(',')
+            code_norm = normalize_upc(code)
+            qty = int(qty.strip())
+            if code_norm not in boxes:
+                boxes[code_norm] = {}
+            boxes[code_norm][box_no] = boxes[code_norm].get(box_no, 0) + qty
 
     # --- Process Results ---
-    all_codes = set(list(orders['UPC_CODE_NORM']) + list(boxes.keys()))
+all_codes = set(list(orders['UPC_CODE_NORM']) + list(boxes.keys()))
     data = []
     for code in sorted(all_codes):
         order = upc_to_row.get(code, None)
