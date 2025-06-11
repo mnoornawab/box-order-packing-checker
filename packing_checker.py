@@ -33,15 +33,15 @@ if not upc_col:
     st.error("Your orders.csv must contain a column for UPC (like 'UPC CODE' or 'UPC_CODE').")
     st.stop()
 
+# After converting columns to int
 orders['UPC_CODE_NORM'] = orders[upc_col].apply(normalize_upc)
-
 orders['TOTAL'] = orders['TOTAL'].astype(int)
 orders['RESERVED'] = orders['RESERVED'].astype(int)
 orders['CONFIRMED'] = orders['CONFIRMED'].astype(int)
 orders['BALANCE'] = orders['BALANCE'].astype(int)
 
-    # For matching and output
-    upc_to_row = orders.set_index('UPC_CODE_NORM').to_dict('index')
+# For matching and output
+upc_to_row = orders.set_index('UPC_CODE_NORM').to_dict('index')
 
     # --- Read Boxes ---
     boxes = {}
