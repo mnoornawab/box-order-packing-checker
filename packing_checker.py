@@ -9,7 +9,6 @@ Upload your `orders.csv` and all your scanned box files (as `.txt`).
 This app checks your scanned box contents against orders and gives actionable status for each item.
 """)
 
-# --- File Uploads ---
 orders_file = st.file_uploader("Upload orders.csv", type=["csv"])
 box_files = st.file_uploader("Upload box txt files (multiple allowed)", type=["txt"], accept_multiple_files=True)
 
@@ -18,15 +17,11 @@ def normalize_upc(upc):
     return upc
 
 if orders_file and box_files:
-    # --- Read Orders ---
     orders = pd.read_csv(orders_file, dtype=str)
-    # Don't uppercase everything, keep original headers
     orders.columns = [c.strip() for c in orders.columns]
 
-    # DEBUG: show all detected columns
     st.write("Detected columns in orders.csv:", list(orders.columns))
 
-    # Flexible column matching for UPC
     def colkey(s):
         return s.strip().replace(" ", "").replace("_", "").upper()
     upc_col = None
@@ -38,18 +33,22 @@ if orders_file and box_files:
         st.error("Your orders.csv must contain a column for UPC (like 'UPC CODE', 'UPC_CODE', or 'UPC').")
         st.stop()
 
-    # After finding the UPC column, proceed as normal
     orders['UPC_CODE_NORM'] = orders[upc_col].apply(normalize_upc)
-    # Column names below must match your CSV headers (case sensitive, strip spaces)
     orders['TOTAL'] = orders['TOTAL'].astype(int)
     orders['RESERVED'] = orders['RESERVED'].astype(int)
     orders['CONFIRMED'] = orders['CONFIRMED'].astype(int)
     orders['BALANCE'] = orders['BALANCE'].astype(int)
 
-    # For matching and output
-    upc_to_row = orders.set_index('UPC_CODE_NORM').to_dict('index')
+    # Group by normalized UPC code
+    orders_grouped = orders.groupby('UPC_CODE_NORM', as_index=False).agg({
+        'TOTAL': 'sum',
+        'RESERVED': 'sum',
+        'CONFIRMED': 'sum',
+        'BALANCE': 'sum',
+        'STYLE': 'first',   # Change to ', '.join if you want to show all styles
+    })
+    upc_to_row = orders_grouped.set_index('UPC_CODE_NORM').to_dict('index')
 
-    # --- Read Boxes (no headers expected!) ---
     boxes = {}
     for uploaded_file in box_files:
         box_no = uploaded_file.name.replace('BOX NO', '').replace('.TXT','').replace('.txt','').strip()
@@ -63,8 +62,7 @@ if orders_file and box_files:
                     boxes[code_norm] = {}
                 boxes[code_norm][box_no] = boxes[code_norm].get(box_no, 0) + qty
 
-    # --- Process Results ---
-    all_codes = set(list(orders['UPC_CODE_NORM']) + list(boxes.keys()))
+    all_codes = set(list(orders_grouped['UPC_CODE_NORM']) + list(boxes.keys()))
     data = []
     for code in sorted(all_codes):
         order = upc_to_row.get(code, None)
@@ -79,7 +77,6 @@ if orders_file and box_files:
             confirmed = order['CONFIRMED']
             balance = order['BALANCE']
             style = order['STYLE']
-            # Status logic
             if scanned_total == reserved and reserved > 0:
                 note = "To invoice"
             elif scanned_total <= confirmed and confirmed > 0:
@@ -95,7 +92,6 @@ if orders_file and box_files:
             else:
                 note = ""
         else:
-            # Not in orders
             total = ''
             reserved = ''
             confirmed = ''
