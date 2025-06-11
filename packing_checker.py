@@ -8,7 +8,7 @@ st.set_page_config(page_title="Packing Checker Advanced", layout="wide")
 def upload_page():
     st.title("📦 Order Packing Checker (Step 1: Upload Files)")
     st.write("""
-    Upload your `orders.csv` (with one order line per row), then either:
+    Upload your `orders.csv` (one order line per row), then either:
     - Paste one or more GitHub "raw" TXT file URLs for your box scans, **OR**
     - Upload your box scan TXT files directly.
     """)
@@ -44,7 +44,6 @@ def upload_page():
     ready = orders_file is not None and len(box_file_contents) > 0
     if ready:
         if st.button("Go to Results ➡️"):
-            # Store uploads in session state for page 2
             st.session_state['orders_file'] = orders_file
             st.session_state['box_file_contents'] = box_file_contents
             st.session_state['trigger_results'] = True
@@ -62,6 +61,12 @@ def results_page():
             - *Example*: `1(2), 2(1)` means: **2 from box 1**, **1 from box 2** for this order line.
         - **NOTE**: Action required (to invoice, missing stock, over-packed, already invoiced, etc.)
         - The allocation is **row by row**: once stock for a UPC is used up by an earlier row, it is no longer available to later rows.
+
+        ---
+        ### 📦 Packing List Per Box
+        Below the main table, you will see a packing list for each box.
+        - **For each box**, you get a breakdown of order lines, UPC, style, and how many of each was packed in that box.
+        - You can download a CSV for each box for your records or to print/attach to boxes.
         """)
 
     # --- Load previously uploaded data ---
@@ -75,7 +80,6 @@ def results_page():
     # --- Load orders.csv ---
     orders = pd.read_csv(orders_file, dtype=str)
     orders.columns = [c.strip() for c in orders.columns]
-    # Flexible UPC col detection
     def colkey(s): return s.strip().replace(" ", "").replace("_", "").upper()
     upc_col = None
     for col in orders.columns:
@@ -85,7 +89,6 @@ def results_page():
     if not upc_col:
         st.error("Your orders.csv must contain a column for UPC (like 'UPC CODE', 'UPC_CODE', or 'UPC').")
         return
-    # Convert to numeric
     for c in ["TOTAL", "RESERVED", "CONFIRMED", "BALANCE"]:
         orders[c] = orders[c].astype(int)
 
@@ -105,7 +108,9 @@ def results_page():
 
     # --- Allocation Logic (per-row, consuming available stock as we go) ---
     boxes_remaining = {upc: box_qtys.copy() for upc, box_qtys in boxes.items()}
+    packing_lists = {}  # box_no -> list of allocations for packing lists
     data = []
+
     for idx, row in orders.iterrows():
         order_no = row.get('ORDER NO', '')
         upc_raw = row[upc_col]
@@ -129,6 +134,15 @@ def results_page():
                     qty_needed -= allocate_qty
                     scanned_total += allocate_qty
                     boxes_remaining[code][box_no] -= allocate_qty
+                    # --- Add to packing list for that box ---
+                    if box_no not in packing_lists:
+                        packing_lists[box_no] = []
+                    packing_lists[box_no].append({
+                        'ORDER NO': order_no,
+                        'UPC CODE': code,
+                        'STYLE': style,
+                        'QTY IN BOX': allocate_qty
+                    })
                 if qty_needed == 0:
                     break
 
@@ -162,12 +176,26 @@ def results_page():
         })
 
     df = pd.DataFrame(data)
+    st.subheader("Main Results Table (Per Order Line)")
     st.dataframe(df, use_container_width=True)
     csv = df.to_csv(index=False).encode()
     st.download_button("Download results as CSV", data=csv, file_name='check_results.csv', mime='text/csv')
 
+    # --- Packing lists per box ---
+    st.subheader("📦 Packing List Per Box")
+    if packing_lists:
+        for box_no in sorted(packing_lists.keys(), key=lambda x: int(x) if x.isdigit() else x):
+            st.markdown(f"**Box {box_no}**")
+            box_df = pd.DataFrame(packing_lists[box_no])
+            st.dataframe(box_df)
+            box_csv = box_df.to_csv(index=False).encode()
+            st.download_button(f"Download CSV for Box {box_no}", data=box_csv, file_name=f"packing_list_box_{box_no}.csv", mime='text/csv')
+    else:
+        st.write("No items allocated to boxes.")
+
     st.info("""
-    - You can click column headers to sort, or download the results as CSV.
+    - You can click column headers to sort, or download results as CSV.
+    - Download packing lists for each box below the main table!
     - If you want to re-run, just go back to the upload page and submit new files.
     """)
 
