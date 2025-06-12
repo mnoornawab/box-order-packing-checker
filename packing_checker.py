@@ -42,14 +42,13 @@ def upload_page():
             st.session_state['orders_file'] = orders_file
             st.session_state['box_file_contents'] = box_file_contents
             st.session_state['trigger_results'] = True
-            st.experimental_rerun()  # Immediately move to results page
 
 def results_page():
     st.title("📦 Packing Checker Results (Step 2: Allocation)")
     with st.expander("ℹ️ Table Explanations & Summary (click to expand)"):
         st.markdown("""
         - **Main Results Table**: Each row = a line from your orders.csv (with correct allocation per order and per box).
-        - **Summary Table**: Total scanned items, scanned per UPC, scanned per box, and items scanned but not on order (with which boxes).
+        - **Summary Table**: Grand total scanned, scanned per box (by style), and items scanned but not on order (by style and box).
         """)
 
     orders_file = st.session_state.get('orders_file', None)
@@ -88,10 +87,7 @@ def results_page():
                     boxes[code_norm] = {}
                 boxes[code_norm][box_no] = boxes[code_norm].get(box_no, 0) + qty
 
-    # --- Allocation: per-row, consuming stock as we go ---
-    boxes_remaining = {upc: box_qtys.copy() for upc, box_qtys in boxes.items()}
-    data = []
-
+    # --- Calculate scanned_totals and scanned_by_box for summary tables ---
     scanned_totals = {}   # upc -> total qty scanned
     scanned_by_box = {}   # box_no -> dict(upc -> qty)
     for upc, box_dict in boxes.items():
@@ -100,6 +96,15 @@ def results_page():
             if box_no not in scanned_by_box:
                 scanned_by_box[box_no] = {}
             scanned_by_box[box_no][upc] = qty
+
+    # --- Build UPC->STYLE mapping for style summary ---
+    upc_to_style = {}
+    for idx, row in orders.iterrows():
+        upc_to_style[normalize_upc(row[upc_col])] = row.get("STYLE", "")
+
+    # --- Allocation: per-row, consuming stock as we go ---
+    boxes_remaining = {upc: box_qtys.copy() for upc, box_qtys in boxes.items()}
+    data = []
 
     for idx, row in orders.iterrows():
         order_no = row.get('ORDER NO', '')
@@ -165,61 +170,73 @@ def results_page():
     # ======= SUMMARY SECTION BELOW ==========
     st.subheader("Summary Tables")
 
-   # --- Grand total scanned ---
-total_scanned = sum(scanned_totals.values())
-st.write(f"**Grand Total Items Scanned:** {total_scanned}")
+    # --- Grand total scanned ---
+    total_scanned = sum(scanned_totals.values())
+    st.write(f"**Grand Total Items Scanned:** {total_scanned}")
 
-# --- Total scanned per box, show STYLE CODE instead of UPC ---
-per_box_table = []
-# Build UPC->STYLE mapping for quick lookup
-upc_to_style = {}
-for idx, row in orders.iterrows():
-    upc_to_style[normalize_upc(row[upc_col])] = row.get("STYLE", "")
-
-for box_no in sorted(scanned_by_box.keys(), key=lambda x: int(x) if x.isdigit() else x):
-    upc_dict = scanned_by_box[box_no]
-    total_qty = sum(upc_dict.values())
-    # Group by style code instead of UPC
-    style_dict = {}
-    for upc, qty in upc_dict.items():
-        style = upc_to_style.get(upc, upc)  # Show UPC if style is unknown
-        style_dict[style] = style_dict.get(style, 0) + qty
-    style_breakdown = "; ".join([f"{style}({qty})" for style, qty in sorted(style_dict.items())])
-    per_box_table.append({
-        "BOX NO": box_no,
-        "TOTAL ITEMS": total_qty,
-        "STYLE BREAKDOWN": style_breakdown
-    })
-df_box = pd.DataFrame(per_box_table)
-st.write("**Total Scanned Per Box (By Style Code)**")
-st.dataframe(df_box, use_container_width=True)
-
-# --- Scanned items not on order, with style code and box numbers ---
-ordered_upcs = set(normalize_upc(str(u)) for u in orders[upc_col])
-not_on_order = []
-for upc in scanned_totals:
-    if upc not in ordered_upcs:
-        style = upc_to_style.get(upc, upc)
-        box_breakdown = []
-        for box_no, upc_dict in scanned_by_box.items():
-            if upc in upc_dict:
-                box_breakdown.append(f"{box_no}({upc_dict[upc]})")
-        not_on_order.append({
-            "STYLE CODE": style,
-            "SCANNED QTY": scanned_totals[upc],
-            "BOX BREAKDOWN": ", ".join(box_breakdown)
+    # --- Total scanned per box, show STYLE CODE instead of UPC ---
+    per_box_table = []
+    for box_no in sorted(scanned_by_box.keys(), key=lambda x: int(x) if x.isdigit() else x):
+        upc_dict = scanned_by_box[box_no]
+        total_qty = sum(upc_dict.values())
+        # Group by style code instead of UPC
+        style_dict = {}
+        for upc, qty in upc_dict.items():
+            style = upc_to_style.get(upc, upc)  # Show UPC if style is unknown
+            style_dict[style] = style_dict.get(style, 0) + qty
+        style_breakdown = "; ".join([f"{style}({qty})" for style, qty in sorted(style_dict.items())])
+        per_box_table.append({
+            "BOX NO": box_no,
+            "TOTAL ITEMS": total_qty,
+            "STYLE BREAKDOWN": style_breakdown
         })
-st.write("**Items Scanned But Not On Order (With Box Numbers, By Style Code)**")
-if not_on_order:
-    df_not_on_order = pd.DataFrame(not_on_order).sort_values(by="STYLE CODE")
-    st.dataframe(df_not_on_order, use_container_width=True)
-    csv_not_on_order = df_not_on_order.to_csv(index=False).encode()
-    st.download_button("Download 'Not On Order' Items CSV", data=csv_not_on_order, file_name='scanned_not_on_order.csv', mime='text/csv')
-else:
-    st.write("✅ All scanned items are linked to orders.")
+    df_box = pd.DataFrame(per_box_table)
+    st.write("**Total Scanned Per Box (By Style Code)**")
+    st.dataframe(df_box, use_container_width=True)
 
-st.info("""
-- Download or filter any table as needed.
-- "Items Scanned But Not On Order" shows all scanned stock not present in your orders, by style.
-- "Total Scanned Per Box" gives you a box-wise packing audit with style codes.
-""")
+    # --- Scanned items not on order, with style code and box numbers ---
+    ordered_upcs = set(normalize_upc(str(u)) for u in orders[upc_col])
+    not_on_order = []
+    for upc in scanned_totals:
+        if upc not in ordered_upcs:
+            style = upc_to_style.get(upc, upc)
+            box_breakdown = []
+            for box_no, upc_dict in scanned_by_box.items():
+                if upc in upc_dict:
+                    box_breakdown.append(f"{box_no}({upc_dict[upc]})")
+            not_on_order.append({
+                "STYLE CODE": style,
+                "SCANNED QTY": scanned_totals[upc],
+                "BOX BREAKDOWN": ", ".join(box_breakdown)
+            })
+    st.write("**Items Scanned But Not On Order (With Box Numbers, By Style Code)**")
+    if not_on_order:
+        df_not_on_order = pd.DataFrame(not_on_order).sort_values(by="STYLE CODE")
+        st.dataframe(df_not_on_order, use_container_width=True)
+        csv_not_on_order = df_not_on_order.to_csv(index=False).encode()
+        st.download_button("Download 'Not On Order' Items CSV", data=csv_not_on_order, file_name='scanned_not_on_order.csv', mime='text/csv')
+    else:
+        st.write("✅ All scanned items are linked to orders.")
+
+    st.info("""
+    - Download or filter any table as needed.
+    - "Items Scanned But Not On Order" shows all scanned stock not present in your orders, by style.
+    - "Total Scanned Per Box" gives you a box-wise packing audit with style codes.
+    """)
+
+def main():
+    if "trigger_results" not in st.session_state:
+        st.session_state["trigger_results"] = False
+
+    if not st.session_state["trigger_results"]:
+        upload_page()
+    else:
+        results_page()
+        if st.button("⬅️ Back to Uploads"):
+            st.session_state["trigger_results"] = False
+            for key in ['orders_file', 'box_file_contents']:
+                if key in st.session_state:
+                    del st.session_state[key]
+
+if __name__ == "__main__":
+    main()
