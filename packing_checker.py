@@ -4,17 +4,12 @@ import requests
 
 st.set_page_config(page_title="Packing Checker Advanced", layout="wide")
 
-# --- Page 1: Upload/Input ---
 def upload_page():
     st.title("📦 Order Packing Checker (Step 1: Upload Files)")
     st.write("""
     Upload your `orders.csv` (one order line per row), then either:
     - Paste one or more GitHub "raw" TXT file URLs for your box scans, **OR**
     - Upload your box scan TXT files directly.
-    """)
-    st.info("""
-    Each row in your orders.csv will be checked and allocated **individually**.
-    Duplicate UPCs are supported, and each will be assigned to available boxes, in order, until all scanned stock is used.
     """)
 
     orders_file = st.file_uploader("Upload orders.csv", type=["csv"])
@@ -47,12 +42,10 @@ def upload_page():
             st.session_state['orders_file'] = orders_file
             st.session_state['box_file_contents'] = box_file_contents
             st.session_state['trigger_results'] = True
+            st.experimental_rerun()  # Immediately move to results page
 
-# --- Page 2: Results ---
 def results_page():
     st.title("📦 Packing Checker Results (Step 2: Allocation)")
-
-    # --- Legend / Explanation ---
     with st.expander("ℹ️ Results Table Explanation / Legend (click to expand)"):
         st.markdown("""
         - **Each row** represents a single line in your orders.csv (even if you have duplicate UPCs).
@@ -61,15 +54,13 @@ def results_page():
             - *Example*: `1(2), 2(1)` means: **2 from box 1**, **1 from box 2** for this order line.
         - **NOTE**: Action required (to invoice, missing stock, over-packed, already invoiced, etc.)
         - The allocation is **row by row**: once stock for a UPC is used up by an earlier row, it is no longer available to later rows.
-
         ---
-        ### 📦 Packing List Per Box
-        Below the main table, you will see a packing list for each box.
-        - **For each box**, you get a breakdown of order lines, UPC, style, and how many of each was packed in that box.
-        - You can download a CSV for each box for your records or to print/attach to boxes.
+        - Scroll down for **Scanned Summaries**:
+            - Total scanned per UPC (ignores order allocation)
+            - Items scanned that are NOT on the order, with breakdown by box
+            - Total scanned summary per box (all UPCs)
         """)
 
-    # --- Load previously uploaded data ---
     orders_file = st.session_state.get('orders_file', None)
     box_file_contents = st.session_state.get('box_file_contents', {})
 
@@ -77,7 +68,6 @@ def results_page():
         st.warning("Please upload your files on the first page.")
         return
 
-    # --- Load orders.csv ---
     orders = pd.read_csv(orders_file, dtype=str)
     orders.columns = [c.strip() for c in orders.columns]
     def colkey(s): return s.strip().replace(" ", "").replace("_", "").upper()
@@ -92,7 +82,6 @@ def results_page():
     for c in ["TOTAL", "RESERVED", "CONFIRMED", "BALANCE"]:
         orders[c] = orders[c].astype(int)
 
-    # --- Parse boxes ---
     def normalize_upc(upc): return str(upc).lstrip('0').strip()
     boxes = {}
     for filename, content in box_file_contents.items():
@@ -106,10 +95,18 @@ def results_page():
                     boxes[code_norm] = {}
                 boxes[code_norm][box_no] = boxes[code_norm].get(box_no, 0) + qty
 
-    # --- Allocation Logic (per-row, consuming available stock as we go) ---
     boxes_remaining = {upc: box_qtys.copy() for upc, box_qtys in boxes.items()}
-    packing_lists = {}  # box_no -> list of allocations for packing lists
     data = []
+
+    # Track all scanned (regardless of allocation) for summaries
+    scanned_totals = {}   # upc -> total qty scanned
+    scanned_by_box = {}   # box_no -> dict(upc -> qty)
+    for upc, box_dict in boxes.items():
+        scanned_totals[upc] = sum(box_dict.values())
+        for box_no, qty in box_dict.items():
+            if box_no not in scanned_by_box:
+                scanned_by_box[box_no] = {}
+            scanned_by_box[box_no][upc] = qty
 
     for idx, row in orders.iterrows():
         order_no = row.get('ORDER NO', '')
@@ -134,15 +131,6 @@ def results_page():
                     qty_needed -= allocate_qty
                     scanned_total += allocate_qty
                     boxes_remaining[code][box_no] -= allocate_qty
-                    # --- Add to packing list for that box ---
-                    if box_no not in packing_lists:
-                        packing_lists[box_no] = []
-                    packing_lists[box_no].append({
-                        'ORDER NO': order_no,
-                        'UPC CODE': code,
-                        'STYLE': style,
-                        'QTY IN BOX': allocate_qty
-                    })
                 if qty_needed == 0:
                     break
 
@@ -181,25 +169,63 @@ def results_page():
     csv = df.to_csv(index=False).encode()
     st.download_button("Download results as CSV", data=csv, file_name='check_results.csv', mime='text/csv')
 
-    # --- Packing lists per box ---
-    st.subheader("📦 Packing List Per Box")
-    if packing_lists:
-        for box_no in sorted(packing_lists.keys(), key=lambda x: int(x) if x.isdigit() else x):
-            st.markdown(f"**Box {box_no}**")
-            box_df = pd.DataFrame(packing_lists[box_no])
-            st.dataframe(box_df)
-            box_csv = box_df.to_csv(index=False).encode()
-            st.download_button(f"Download CSV for Box {box_no}", data=box_csv, file_name=f"packing_list_box_{box_no}.csv", mime='text/csv')
+    # --- 1. Total scanned per UPC ---
+    st.subheader("Summary: Total Scanned Per UPC")
+    upc_summary = []
+    for upc, qty in scanned_totals.items():
+        in_orders = any(normalize_upc(str(u)) == upc for u in orders[upc_col])
+        upc_summary.append({
+            "UPC CODE": upc,
+            "SCANNED QTY": qty,
+            "ON ORDER?": "Yes" if in_orders else "No"
+        })
+    df_upc = pd.DataFrame(upc_summary).sort_values(by="UPC CODE")
+    st.dataframe(df_upc, use_container_width=True)
+
+    # --- 2. Scanned items not on order (and which boxes) ---
+    st.subheader("Items Scanned But Not In Orders (With Box Numbers)")
+    ordered_upcs = set(normalize_upc(str(u)) for u in orders[upc_col])
+    not_on_order = []
+    for upc in scanned_totals:
+        if upc not in ordered_upcs:
+            box_breakdown = []
+            for box_no, upc_dict in scanned_by_box.items():
+                if upc in upc_dict:
+                    box_breakdown.append(f"{box_no}({upc_dict[upc]})")
+            not_on_order.append({
+                "UPC CODE": upc,
+                "SCANNED QTY": scanned_totals[upc],
+                "BOX BREAKDOWN": ", ".join(box_breakdown)
+            })
+    if not_on_order:
+        df_not_on_order = pd.DataFrame(not_on_order).sort_values(by="UPC CODE")
+        st.dataframe(df_not_on_order, use_container_width=True)
+        csv_not_on_order = df_not_on_order.to_csv(index=False).encode()
+        st.download_button("Download 'Not On Order' Items CSV", data=csv_not_on_order, file_name='scanned_not_on_order.csv', mime='text/csv')
     else:
-        st.write("No items allocated to boxes.")
+        st.write("✅ All scanned items are linked to orders.")
+
+    # --- 3. Total scanned summary per box ---
+    st.subheader("Summary: Total Scanned Per Box")
+    per_box_table = []
+    for box_no in sorted(scanned_by_box.keys(), key=lambda x: int(x) if x.isdigit() else x):
+        upc_dict = scanned_by_box[box_no]
+        total_qty = sum(upc_dict.values())
+        upc_breakdown = "; ".join([f"{upc}({qty})" for upc, qty in sorted(upc_dict.items())])
+        per_box_table.append({
+            "BOX NO": box_no,
+            "TOTAL ITEMS": total_qty,
+            "UPC BREAKDOWN": upc_breakdown
+        })
+    df_box = pd.DataFrame(per_box_table)
+    st.dataframe(df_box, use_container_width=True)
 
     st.info("""
-    - You can click column headers to sort, or download results as CSV.
-    - Download packing lists for each box below the main table!
-    - If you want to re-run, just go back to the upload page and submit new files.
+    - Each 'ALLOCATED QTY' value is limited by what's available in scanned boxes and by each order's RESERVED quantity.
+    - If your scanned total is higher than allocated, it means you scanned more than needed for orders.
+    - You can download the list of scanned items that are NOT on any order, including which boxes they're in.
     """)
 
-# --- Main multipage logic ---
 def main():
     if "trigger_results" not in st.session_state:
         st.session_state["trigger_results"] = False
@@ -214,6 +240,7 @@ def main():
             for key in ['orders_file', 'box_file_contents']:
                 if key in st.session_state:
                     del st.session_state[key]
+            st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
