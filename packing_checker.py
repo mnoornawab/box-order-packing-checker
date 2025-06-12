@@ -135,36 +135,62 @@ def main_results_page(orders, upc_col, boxes):
     st.download_button("Download results as CSV", data=csv, file_name='check_results.csv', mime='text/csv')
 
 def box_summary_page(orders, upc_col, boxes):
-    st.subheader("Total Scanned Per Box (By Style Code, Horizontal)")
+    st.subheader("Box Summary")
 
-    # Build UPC->STYLE mapping for quick lookup
+    # Build UPC->STYLE mapping
     upc_to_style = {}
     for idx, row in orders.iterrows():
         upc_to_style[normalize_upc(row[upc_col])] = row.get("STYLE", "")
 
-    # Collect all style codes present
-    style_set = set()
-    scanned_by_box = {}   # box_no -> dict(upc -> qty)
-    for upc, box_dict in boxes.items():
-        style = upc_to_style.get(upc, upc)
-        style_set.add(style)
-        for box_no, qty in box_dict.items():
-            if box_no not in scanned_by_box:
-                scanned_by_box[box_no] = {}
-            scanned_by_box[box_no][style] = scanned_by_box[box_no].get(style, 0) + qty
+    # Collect all box numbers (as ints for sorting)
+    all_box_numbers = sorted(
+        set(int(box_no) for upc in boxes for box_no in boxes[upc])
+    )
 
-    all_styles = sorted(list(style_set))
-    rows = []
-    for box_no in sorted(scanned_by_box.keys(), key=lambda x: int(x) if x.isdigit() else x):
-        row = {"BOX NO": box_no, "TOTAL ITEMS": sum(scanned_by_box[box_no].values())}
-        for style in all_styles:
-            row[style] = scanned_by_box[box_no].get(style, 0)
-        rows.append(row)
+    box_option = st.radio("Show", ["Single Box", "Multiple Boxes"])
+    if box_option == "Single Box":
+        box_sel = st.selectbox("Select Box Number", all_box_numbers, index=0)
+        box_key = str(box_sel)
+        # Build table
+        items = []
+        seq = 1
+        total = 0
+        for upc, box_dict in boxes.items():
+            qty = box_dict.get(box_key, 0)
+            if qty > 0:
+                style = upc_to_style.get(upc, upc)
+                items.append({"Seq No.": seq, "Style Code": style, "Qty": qty})
+                total += qty
+                seq += 1
+        st.markdown(f"**Box No - {box_sel}**")
+        st.markdown(f"**Total items in the box:** {total}")
+        if items:
+            df_items = pd.DataFrame(items)
+            st.table(df_items)
+        else:
+            st.info("No items in this box.")
 
-    df_box = pd.DataFrame(rows)
-    st.dataframe(df_box, use_container_width=True)
-    csv_box = df_box.to_csv(index=False).encode()
-    st.download_button("Download Box Summary as CSV", data=csv_box, file_name='box_summary.csv', mime='text/csv')
+    else:  # Multiple Boxes
+        box_multi = st.multiselect("Select Box Numbers", all_box_numbers, default=all_box_numbers)
+        all_items = []
+        total = 0
+        seq = 1
+        for box_sel in box_multi:
+            box_key = str(box_sel)
+            for upc, box_dict in boxes.items():
+                qty = box_dict.get(box_key, 0)
+                if qty > 0:
+                    style = upc_to_style.get(upc, upc)
+                    all_items.append({"Seq No.": seq, "Box No": box_key, "Style Code": style, "Qty": qty})
+                    total += qty
+                    seq += 1
+        st.markdown(f"**Boxes: {', '.join(map(str, box_multi))}**")
+        st.markdown(f"**Total items in selected boxes:** {total}")
+        if all_items:
+            df_items = pd.DataFrame(all_items)
+            st.table(df_items)
+        else:
+            st.info("No items in selected boxes.")
 
 def items_not_on_order_page(orders, upc_col, boxes):
     st.subheader("Items Scanned But Not On Order (With Box Numbers, By UPC CODE)")
@@ -198,55 +224,51 @@ def items_not_on_order_page(orders, upc_col, boxes):
         st.write("✅ All scanned items are linked to orders.")
 
 def order_status_page(orders, upc_col, boxes):
-    st.subheader("Order Status: Completion and Invoicing Readiness (Horizontal)")
+    st.subheader("Order Status: Completion and Invoicing Readiness (Per Order)")
 
-    # UPC->STYLE for column headers
-    upc_to_style = {}
-    for idx, row in orders.iterrows():
-        upc_to_style[normalize_upc(row[upc_col])] = row.get("STYLE", "")
-
-    # Total scanned by UPC
+    # Calculate total scanned & which boxes for each upc
     scanned_totals = {}
+    upc_boxes = {}
     for upc, box_dict in boxes.items():
         scanned_totals[upc] = sum(box_dict.values())
+        upc_boxes[upc] = [box_no for box_no, qty in box_dict.items() if qty > 0]
 
-    # Collect all style codes in orders (for column order)
-    style_set = set()
-    style_to_upc = {}
-    for idx, row in orders.iterrows():
-        style = row.get('STYLE', '')
+    # Only orders with reserved > 0 and not fully invoiced
+    orders_to_check = orders[orders['RESERVED'] > 0]
+    order_numbers = sorted(orders_to_check['ORDER NO'].unique())
+
+    if not order_numbers:
+        st.info("No pending orders with reserved quantities.")
+        return
+
+    order_sel = st.selectbox("Select Order Number", order_numbers)
+    order_rows = orders[orders['ORDER NO'] == order_sel]
+
+    items = []
+    complete = True
+    for idx, row in order_rows.iterrows():
         upc = normalize_upc(row[upc_col])
-        style_set.add(style)
-        style_to_upc[style] = upc
+        style = row.get("STYLE", "")
+        needed = row['RESERVED']
+        found = scanned_totals.get(upc, 0)
+        boxes_found = ", ".join(sorted(upc_boxes.get(upc, []), key=lambda x: int(x) if x.isdigit() else x))
+        status = "✅" if found >= needed and needed > 0 else "❌"
+        if status == "❌":
+            complete = False
+        items.append({
+            "UPC CODE": upc,
+            "Style Code": style,
+            "Qty Needed": needed,
+            "Qty Scanned": found,
+            "Box Numbers": boxes_found,
+            "Status": status
+        })
 
-    all_styles = sorted(list(style_set))
+    st.markdown(f"**Order No - {order_sel}**")
+    st.markdown(f"**Ready for invoicing:** {'✅ COMPLETE' if complete else '❌ INCOMPLETE'}")
+    df_items = pd.DataFrame(items)
+    st.table(df_items)
 
-    # Group by order
-    order_grouped = orders.groupby('ORDER NO')
-    rows = []
-    for order_no, order_rows in order_grouped:
-        order_complete = True
-        row = {"ORDER NO": order_no, "STATUS": ""}
-        for style in all_styles:
-            row[style] = ""
-        for idx, orow in order_rows.iterrows():
-            code = normalize_upc(orow[upc_col])
-            style = orow.get('STYLE', '')
-            needed = orow['RESERVED']
-            available = scanned_totals.get(code, 0)
-            is_complete = available >= needed and needed > 0
-            if not is_complete:
-                order_complete = False
-            checkmark = "✅" if is_complete else "❌"
-            row[style] = f"{needed}/{available} {checkmark}"
-        row["STATUS"] = "COMPLETE FOR INVOICING" if order_complete else "INCOMPLETE"
-        rows.append(row)
-
-    df_status = pd.DataFrame(rows)
-    st.dataframe(df_status, use_container_width=True)
-    csv_status = df_status.to_csv(index=False).encode()
-    st.download_button("Download Order Status as CSV", data=csv_status, file_name='order_status_summary.csv', mime='text/csv')
-    
 def main():
     if "trigger_results" not in st.session_state:
         st.session_state["trigger_results"] = False
