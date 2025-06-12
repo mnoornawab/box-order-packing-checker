@@ -4,6 +4,38 @@ import requests
 
 st.set_page_config(page_title="Packing Checker Advanced", layout="wide")
 
+def normalize_upc(upc):
+    return str(upc).lstrip('0').strip()
+
+@st.cache_data(show_spinner=False)
+def parse_orders(orders_file):
+    orders = pd.read_csv(orders_file, dtype=str)
+    orders.columns = [c.strip() for c in orders.columns]
+    def colkey(s): return s.strip().replace(" ", "").replace("_", "").upper()
+    upc_col = None
+    for col in orders.columns:
+        if colkey(col) in ["UPCCODE", "UPC"]:
+            upc_col = col
+            break
+    for c in ["TOTAL", "RESERVED", "CONFIRMED", "BALANCE"]:
+        orders[c] = orders[c].astype(int)
+    return orders, upc_col
+
+@st.cache_data(show_spinner=False)
+def parse_boxes(box_file_contents):
+    boxes = {}
+    for filename, content in box_file_contents.items():
+        box_no = filename.replace('BOX NO', '').replace('.TXT','').replace('.txt','').strip()
+        for line in content.strip().splitlines():
+            if ',' in line:
+                code, qty = line.strip().split(',', 1)
+                code_norm = normalize_upc(code)
+                qty = int(qty.strip())
+                if code_norm not in boxes:
+                    boxes[code_norm] = {}
+                boxes[code_norm][box_no] = boxes[code_norm].get(box_no, 0) + qty
+    return boxes
+
 def upload_page():
     st.title("📦 Order Packing Checker (Step 1: Upload Files)")
     st.write("""
@@ -43,69 +75,11 @@ def upload_page():
             st.session_state['box_file_contents'] = box_file_contents
             st.session_state['trigger_results'] = True
 
-def results_page():
-    st.title("📦 Packing Checker Results (Step 2: Allocation)")
-    with st.expander("ℹ️ Table Explanations & Summary (click to expand)"):
-        st.markdown("""
-        - **Main Results Table**: Each row = a line from your orders.csv (with correct allocation per order and per box).
-        - **Summary Table**: Grand total scanned, scanned per box (by style), and items scanned but not on order (by style and box).
-        """)
-
-    orders_file = st.session_state.get('orders_file', None)
-    box_file_contents = st.session_state.get('box_file_contents', {})
-
-    if not (orders_file and box_file_contents):
-        st.warning("Please upload your files on the first page.")
-        return
-
-    # --- Read orders.csv and get UPC column ---
-    orders = pd.read_csv(orders_file, dtype=str)
-    orders.columns = [c.strip() for c in orders.columns]
-    def colkey(s): return s.strip().replace(" ", "").replace("_", "").upper()
-    upc_col = None
-    for col in orders.columns:
-        if colkey(col) in ["UPCCODE", "UPC"]:
-            upc_col = col
-            break
-    if not upc_col:
-        st.error("Your orders.csv must contain a column for UPC (like 'UPC CODE', 'UPC_CODE', or 'UPC').")
-        return
-    for c in ["TOTAL", "RESERVED", "CONFIRMED", "BALANCE"]:
-        orders[c] = orders[c].astype(int)
-
-    # --- Parse box scan files ---
-    def normalize_upc(upc): return str(upc).lstrip('0').strip()
-    boxes = {}
-    for filename, content in box_file_contents.items():
-        box_no = filename.replace('BOX NO', '').replace('.TXT','').replace('.txt','').strip()
-        for line in content.strip().splitlines():
-            if ',' in line:
-                code, qty = line.strip().split(',', 1)
-                code_norm = normalize_upc(code)
-                qty = int(qty.strip())
-                if code_norm not in boxes:
-                    boxes[code_norm] = {}
-                boxes[code_norm][box_no] = boxes[code_norm].get(box_no, 0) + qty
-
-    # --- Calculate scanned_totals and scanned_by_box for summary tables ---
-    scanned_totals = {}   # upc -> total qty scanned
-    scanned_by_box = {}   # box_no -> dict(upc -> qty)
-    for upc, box_dict in boxes.items():
-        scanned_totals[upc] = sum(box_dict.values())
-        for box_no, qty in box_dict.items():
-            if box_no not in scanned_by_box:
-                scanned_by_box[box_no] = {}
-            scanned_by_box[box_no][upc] = qty
-
-    # --- Build UPC->STYLE mapping for style summary ---
-    upc_to_style = {}
-    for idx, row in orders.iterrows():
-        upc_to_style[normalize_upc(row[upc_col])] = row.get("STYLE", "")
-
+def main_results_page(orders, upc_col, boxes):
+    st.subheader("Main Allocation Table (Per Order Line)")
     # --- Allocation: per-row, consuming stock as we go ---
     boxes_remaining = {upc: box_qtys.copy() for upc, box_qtys in boxes.items()}
     data = []
-
     for idx, row in orders.iterrows():
         order_no = row.get('ORDER NO', '')
         upc_raw = row[upc_col]
@@ -115,11 +89,9 @@ def results_page():
         reserved = row['RESERVED']
         confirmed = row['CONFIRMED']
         balance = row['BALANCE']
-
         allocation = []
         qty_needed = reserved
         scanned_total = 0
-
         if code in boxes_remaining:
             for box_no in sorted(boxes_remaining[code], key=lambda x: int(x) if x.isdigit() else x):
                 box_qty = boxes_remaining[code][box_no]
@@ -131,7 +103,6 @@ def results_page():
                     boxes_remaining[code][box_no] -= allocate_qty
                 if qty_needed == 0:
                     break
-
         missing = ""
         if scanned_total == reserved and reserved > 0:
             note = "To invoice"
@@ -147,7 +118,6 @@ def results_page():
             missing = str(balance)
         else:
             note = ""
-
         data.append({
             'ORDER NO': order_no,
             'UPC CODE': code,
@@ -160,69 +130,103 @@ def results_page():
             'ALLOCATED BOXES': ", ".join(allocation),
             'NOTE': note
         })
-
     df = pd.DataFrame(data)
-    st.subheader("Main Results Table (Per Order Line)")
     st.dataframe(df, use_container_width=True)
     csv = df.to_csv(index=False).encode()
     st.download_button("Download results as CSV", data=csv, file_name='check_results.csv', mime='text/csv')
 
-    # ======= SUMMARY SECTION BELOW ==========
-    st.subheader("Summary Tables")
-
-    # --- Grand total scanned ---
-    total_scanned = sum(scanned_totals.values())
-    st.write(f"**Grand Total Items Scanned:** {total_scanned}")
-
-    # --- Total scanned per box, show STYLE CODE instead of UPC ---
+def box_summary_page(orders, upc_col, boxes):
+    st.subheader("Total Scanned Per Box (By Style Code, Vertical List)")
+    # Build UPC->STYLE mapping for quick lookup
+    upc_to_style = {}
+    for idx, row in orders.iterrows():
+        upc_to_style[normalize_upc(row[upc_col])] = row.get("STYLE", "")
+    scanned_by_box = {}   # box_no -> dict(upc -> qty)
+    for upc, box_dict in boxes.items():
+        for box_no, qty in box_dict.items():
+            if box_no not in scanned_by_box:
+                scanned_by_box[box_no] = {}
+            scanned_by_box[box_no][upc] = qty
     per_box_table = []
     for box_no in sorted(scanned_by_box.keys(), key=lambda x: int(x) if x.isdigit() else x):
         upc_dict = scanned_by_box[box_no]
         total_qty = sum(upc_dict.values())
-        # Group by style code instead of UPC
-        style_dict = {}
-        for upc, qty in upc_dict.items():
-            style = upc_to_style.get(upc, "")  # Blank if style is unknown
-            style_dict[style] = style_dict.get(style, 0) + qty
-        style_breakdown = "; ".join([f"{style}({qty})" for style, qty in sorted(style_dict.items())])
+        # Group by style code
+        style_lines = []
+        for upc, qty in sorted(upc_dict.items()):
+            style = upc_to_style.get(upc, upc)
+            style_lines.append(f"{style}: {qty}")
         per_box_table.append({
             "BOX NO": box_no,
             "TOTAL ITEMS": total_qty,
-            "STYLE BREAKDOWN": style_breakdown
+            "STYLE BREAKDOWN": "\n".join(style_lines)
         })
     df_box = pd.DataFrame(per_box_table)
-    st.write("**Total Scanned Per Box (By Style Code)**")
     st.dataframe(df_box, use_container_width=True)
+    csv_box = df_box.to_csv(index=False).encode()
+    st.download_button("Download Box Summary as CSV", data=csv_box, file_name='box_summary.csv', mime='text/csv')
 
-    # --- Scanned items not on order, with style code and box numbers ---
+def items_not_on_order_page(orders, upc_col, boxes):
+    st.subheader("Items Scanned But Not On Order (With Box Numbers, By UPC CODE)")
     ordered_upcs = set(normalize_upc(str(u)) for u in orders[upc_col])
+    scanned_totals = {}   # upc -> total qty scanned
+    scanned_by_box = {}   # box_no -> dict(upc -> qty)
+    for upc, box_dict in boxes.items():
+        scanned_totals[upc] = sum(box_dict.values())
+        for box_no, qty in box_dict.items():
+            if box_no not in scanned_by_box:
+                scanned_by_box[box_no] = {}
+            scanned_by_box[box_no][upc] = qty
     not_on_order = []
     for upc in scanned_totals:
         if upc not in ordered_upcs:
-            style = upc_to_style.get(upc, "")  # Always show style (or blank), never UPC
             box_breakdown = []
             for box_no, upc_dict in scanned_by_box.items():
                 if upc in upc_dict:
                     box_breakdown.append(f"{box_no}({upc_dict[upc]})")
             not_on_order.append({
-                "STYLE CODE": style,
+                "UPC CODE": upc,
                 "SCANNED QTY": scanned_totals[upc],
                 "BOX BREAKDOWN": ", ".join(box_breakdown)
             })
-    st.write("**Items Scanned But Not On Order (With Box Numbers, By Style Code)**")
     if not_on_order:
-        df_not_on_order = pd.DataFrame(not_on_order).sort_values(by="STYLE CODE")
+        df_not_on_order = pd.DataFrame(not_on_order).sort_values(by="UPC CODE")
         st.dataframe(df_not_on_order, use_container_width=True)
         csv_not_on_order = df_not_on_order.to_csv(index=False).encode()
         st.download_button("Download 'Not On Order' Items CSV", data=csv_not_on_order, file_name='scanned_not_on_order.csv', mime='text/csv')
     else:
         st.write("✅ All scanned items are linked to orders.")
 
-    st.info("""
-    - Download or filter any table as needed.
-    - "Items Scanned But Not On Order" shows all scanned stock not present in your orders, by style.
-    - "Total Scanned Per Box" gives you a box-wise packing audit with style codes.
-    """)
+def order_status_page(orders, upc_col, boxes):
+    st.subheader("Order Status: Completion and Invoicing Readiness")
+    scanned_totals = {}   # upc -> total qty scanned
+    for upc, box_dict in boxes.items():
+        scanned_totals[upc] = sum(box_dict.values())
+    order_grouped = orders.groupby('ORDER NO')
+    order_summary = []
+    for order_no, order_rows in order_grouped:
+        order_complete = True
+        lines = []
+        for idx, row in order_rows.iterrows():
+            code = normalize_upc(row[upc_col])
+            style = row.get('STYLE', '')
+            needed = row['RESERVED']
+            available = scanned_totals.get(code, 0)
+            is_complete = available >= needed and needed > 0
+            if not is_complete:
+                order_complete = False
+            lines.append(f"{style or code}: Needed={needed}, Available={available}, " +
+                         ("✅" if is_complete else "❌"))
+        status = "COMPLETE FOR INVOICING" if order_complete else "INCOMPLETE"
+        order_summary.append({
+            "ORDER NO": order_no,
+            "DETAIL": "\n".join(lines),
+            "STATUS": status
+        })
+    df_status = pd.DataFrame(order_summary)
+    st.dataframe(df_status, use_container_width=True)
+    csv_status = df_status.to_csv(index=False).encode()
+    st.download_button("Download Order Status as CSV", data=csv_status, file_name='order_status_summary.csv', mime='text/csv')
 
 def main():
     if "trigger_results" not in st.session_state:
@@ -231,9 +235,26 @@ def main():
     if not st.session_state["trigger_results"]:
         upload_page()
     else:
-        results_page()
+        orders_file = st.session_state.get('orders_file', None)
+        box_file_contents = st.session_state.get('box_file_contents', {})
+        if not (orders_file and box_file_contents):
+            st.warning("Please upload your files on the first page.")
+            return
+        orders, upc_col = parse_orders(orders_file)
+        boxes = parse_boxes(box_file_contents)
+        st.markdown("## 📊 Reports & Summaries")
+        tab1, tab2, tab3, tab4 = st.tabs(
+            ["Main Allocation Table", "Box Summary", "Items Not On Order", "Order Status"]
+        )
+        with tab1:
+            main_results_page(orders, upc_col, boxes)
+        with tab2:
+            box_summary_page(orders, upc_col, boxes)
+        with tab3:
+            items_not_on_order_page(orders, upc_col, boxes)
+        with tab4:
+            order_status_page(orders, upc_col, boxes)
         if st.button("⬅️ Back to Uploads"):
-            # Clear uploaded files and state
             st.session_state["trigger_results"] = False
             for key in ['orders_file', 'box_file_contents']:
                 if key in st.session_state:
