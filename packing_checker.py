@@ -2,7 +2,25 @@ import streamlit as st
 import pandas as pd
 import requests
 
+# ---------- STYLING ----------
 st.set_page_config(page_title="Packing Checker Advanced", layout="wide")
+st.markdown("""
+<style>
+body {background-color: #f8fafc;}
+[data-testid="stHeader"] {background-color: #0e1117;}
+h1, h2, h3, h4 {color: #1a237e;}
+.stButton>button {
+    background: #004d40 !important;
+    color: white !important;
+    border-radius: 8px;
+    padding: 0.4em 1.2em;
+    margin: 6px 0;
+    font-weight: 600;
+}
+thead tr th {background: #ede7f6;}
+tbody tr {background: #fafafa;}
+</style>
+""", unsafe_allow_html=True)
 
 def normalize_upc(upc):
     return str(upc).lstrip('0').strip()
@@ -142,7 +160,6 @@ def box_summary_page(orders, upc_col, boxes):
     for idx, row in orders.iterrows():
         upc_to_style[normalize_upc(row[upc_col])] = row.get("STYLE", "")
 
-    # Collect all box numbers (as ints for sorting)
     all_box_numbers = sorted(
         set(int(box_no) for upc in boxes for box_no in boxes[upc])
     )
@@ -151,7 +168,6 @@ def box_summary_page(orders, upc_col, boxes):
     if box_option == "Single Box":
         box_sel = st.selectbox("Select Box Number", all_box_numbers, index=0)
         box_key = str(box_sel)
-        # Build table
         items = []
         seq = 1
         total = 0
@@ -167,6 +183,8 @@ def box_summary_page(orders, upc_col, boxes):
         if items:
             df_items = pd.DataFrame(items)
             st.table(df_items)
+            csv_items = df_items.to_csv(index=False).encode()
+            st.download_button("Download Box Table as CSV", data=csv_items, file_name=f'box_{box_sel}_items.csv', mime='text/csv')
         else:
             st.info("No items in this box.")
 
@@ -189,6 +207,8 @@ def box_summary_page(orders, upc_col, boxes):
         if all_items:
             df_items = pd.DataFrame(all_items)
             st.table(df_items)
+            csv_items = df_items.to_csv(index=False).encode()
+            st.download_button("Download Boxes Table as CSV", data=csv_items, file_name='multi_box_items.csv', mime='text/csv')
         else:
             st.info("No items in selected boxes.")
 
@@ -226,14 +246,12 @@ def items_not_on_order_page(orders, upc_col, boxes):
 def order_status_page(orders, upc_col, boxes):
     st.subheader("Order Status: Completion and Invoicing Readiness (Per Order)")
 
-    # Calculate total scanned & which boxes for each upc
     scanned_totals = {}
     upc_boxes = {}
     for upc, box_dict in boxes.items():
         scanned_totals[upc] = sum(box_dict.values())
         upc_boxes[upc] = [box_no for box_no, qty in box_dict.items() if qty > 0]
 
-    # Only orders with reserved > 0 and not fully invoiced
     orders_to_check = orders[orders['RESERVED'] > 0]
     order_numbers = sorted(orders_to_check['ORDER NO'].unique())
 
@@ -268,8 +286,16 @@ def order_status_page(orders, upc_col, boxes):
     st.markdown(f"**Ready for invoicing:** {'✅ COMPLETE' if complete else '❌ INCOMPLETE'}")
     df_items = pd.DataFrame(items)
     st.table(df_items)
+    csv_items = df_items.to_csv(index=False).encode()
+    st.download_button("Download Order Items Table as CSV", data=csv_items, file_name=f'order_{order_sel}_items.csv', mime='text/csv')
 
 def main():
+    if st.session_state.get("back_to_uploads", False):
+        st.session_state.clear()
+        st.session_state["trigger_results"] = False
+        st.session_state["back_to_uploads"] = False
+        st.stop()
+
     if "trigger_results" not in st.session_state:
         st.session_state["trigger_results"] = False
 
@@ -281,7 +307,12 @@ def main():
         if not (orders_file and box_file_contents):
             st.warning("Please upload your files on the first page.")
             return
-        orders, upc_col = parse_orders(orders_file)
+        try:
+            orders, upc_col = parse_orders(orders_file)
+        except pd.errors.EmptyDataError:
+            st.error("Your orders.csv file appears empty or invalid. Please re-upload.")
+            st.session_state["back_to_uploads"] = True
+            st.stop()
         boxes = parse_boxes(box_file_contents)
         st.markdown("## 📊 Reports & Summaries")
         tab1, tab2, tab3, tab4 = st.tabs(
@@ -296,11 +327,8 @@ def main():
         with tab4:
             order_status_page(orders, upc_col, boxes)
         if st.button("⬅️ Back to Uploads"):
-            st.session_state["trigger_results"] = False
-            for key in ['orders_file', 'box_file_contents']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.stop()
+            st.session_state["back_to_uploads"] = True
+            st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
