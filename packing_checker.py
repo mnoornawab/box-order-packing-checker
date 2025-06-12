@@ -244,7 +244,7 @@ def items_not_on_order_page(orders, upc_col, boxes):
         st.write("✅ All scanned items are linked to orders.")
 
 def order_status_page(orders, upc_col, boxes):
-    st.subheader("Order Status: Completion and Invoicing Readiness (Per Order)")
+    st.subheader("Order Status: Completion and Invoicing Readiness")
 
     scanned_totals = {}
     upc_boxes = {}
@@ -270,8 +270,22 @@ def order_status_page(orders, upc_col, boxes):
         needed = row['RESERVED']
         found = scanned_totals.get(upc, 0)
         boxes_found = ", ".join(sorted(upc_boxes.get(upc, []), key=lambda x: int(x) if x.isdigit() else x))
-        status = "✅" if found >= needed and needed > 0 else "❌"
-        if status == "❌":
+        # Status logic
+        if needed > 0:
+            if found == needed:
+                status = "Ready to Invoice"
+            elif found == 0:
+                status = "Not Found in Box"
+                complete = False
+            elif 0 < found < needed:
+                status = f"Missing: {needed - found}"
+                complete = False
+            elif found > needed:
+                status = f"Over-packed (found: {found}, reserved: {needed})"
+            else:
+                status = ""
+        else:
+            status = "Not Available in Stock"
             complete = False
         items.append({
             "UPC CODE": upc,
@@ -283,7 +297,7 @@ def order_status_page(orders, upc_col, boxes):
         })
 
     st.markdown(f"**Order No - {order_sel}**")
-    st.markdown(f"**Ready for invoicing:** {'✅ COMPLETE' if complete else '❌ INCOMPLETE'}")
+    st.markdown(f"**Ready for invoicing:** {'COMPLETE' if complete else 'INCOMPLETE'}")
     df_items = pd.DataFrame(items)
     st.table(df_items)
     csv_items = df_items.to_csv(index=False).encode()
