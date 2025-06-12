@@ -77,7 +77,6 @@ def upload_page():
 
 def main_results_page(orders, upc_col, boxes):
     st.subheader("Main Allocation Table (Per Order Line)")
-    # --- Allocation: per-row, consuming stock as we go ---
     boxes_remaining = {upc: box_qtys.copy() for upc, box_qtys in boxes.items()}
     data = []
     for idx, row in orders.iterrows():
@@ -137,7 +136,6 @@ def main_results_page(orders, upc_col, boxes):
 
 def box_summary_page(orders, upc_col, boxes):
     st.subheader("Total Scanned Per Box (By Style Code, Vertical List)")
-    # Build UPC->STYLE mapping for quick lookup
     upc_to_style = {}
     for idx, row in orders.iterrows():
         upc_to_style[normalize_upc(row[upc_col])] = row.get("STYLE", "")
@@ -151,7 +149,6 @@ def box_summary_page(orders, upc_col, boxes):
     for box_no in sorted(scanned_by_box.keys(), key=lambda x: int(x) if x.isdigit() else x):
         upc_dict = scanned_by_box[box_no]
         total_qty = sum(upc_dict.values())
-        # Group by style code
         style_lines = []
         for upc, qty in sorted(upc_dict.items()):
             style = upc_to_style.get(upc, upc)
@@ -169,8 +166,8 @@ def box_summary_page(orders, upc_col, boxes):
 def items_not_on_order_page(orders, upc_col, boxes):
     st.subheader("Items Scanned But Not On Order (With Box Numbers, By UPC CODE)")
     ordered_upcs = set(normalize_upc(str(u)) for u in orders[upc_col])
-    scanned_totals = {}   # upc -> total qty scanned
-    scanned_by_box = {}   # box_no -> dict(upc -> qty)
+    scanned_totals = {}
+    scanned_by_box = {}
     for upc, box_dict in boxes.items():
         scanned_totals[upc] = sum(box_dict.values())
         for box_no, qty in box_dict.items():
@@ -199,7 +196,7 @@ def items_not_on_order_page(orders, upc_col, boxes):
 
 def order_status_page(orders, upc_col, boxes):
     st.subheader("Order Status: Completion and Invoicing Readiness")
-    scanned_totals = {}   # upc -> total qty scanned
+    scanned_totals = {}
     for upc, box_dict in boxes.items():
         scanned_totals[upc] = sum(box_dict.values())
     order_grouped = orders.groupby('ORDER NO')
