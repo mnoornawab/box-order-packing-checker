@@ -341,8 +341,8 @@ def main():
         with tab4:
             order_status_page(orders, upc_col, boxes)
         if st.button("⬅️ Back to Uploads"):
-            st.session_state["back_to_uploads"] = True
-            st.experimental_rerun()
+    st.session_state.clear()
+    st.stop()
 
 if __name__ == "__main__":
     main()
