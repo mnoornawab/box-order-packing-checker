@@ -340,9 +340,10 @@ def main():
             items_not_on_order_page(orders, upc_col, boxes)
         with tab4:
             order_status_page(orders, upc_col, boxes)
+            
         if st.button("⬅️ Back to Uploads"):
-    st.session_state.clear()
-    st.stop()
+            st.session_state.clear()
+            st.stop()
 
 if __name__ == "__main__":
     main()
